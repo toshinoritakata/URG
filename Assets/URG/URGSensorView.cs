@@ -9,17 +9,50 @@ using SCIP_library;
 public class URGSensorView : MonoBehaviour
 {
     private URGSensor _urg;
-    public int _th;
-    public int _minSize;
-    public int _maxSize;
+    [SerializeField] private int _th;
+    [SerializeField] private int _minSize;
+    [SerializeField] private int _maxSize;
+
     public GameObject _marker;
     private GameObject _spawn;
+
+    private Mesh _mesh;
+    private List<Vector3> _vertices;
+    private List<int> _triangles;
+    [SerializeField]
+    private Material _mat;
 
     void Start()
     {
         _urg = new URGSensor();
         _urg.OpenStream("192.168.0.10", 0, 2160);
         _spawn = null;
+
+        var meshFilter = gameObject.AddComponent<MeshFilter>();
+        var meshRenderer = gameObject.AddComponent<MeshRenderer>();
+        _mesh = meshFilter.mesh;
+        _mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        meshRenderer.sharedMaterial = _mat;
+
+        _mesh.Clear();
+
+        var step = _urg.Steps;
+        _vertices = new List<Vector3>();
+        for (int i = 0; i < step; i++)
+        {
+            _vertices.Add(Vector3.zero);
+        }
+        _vertices.Add(Vector3.zero);
+        _mesh.SetVertices(_vertices);
+
+        _triangles = new List<int>();
+        for (int i = 0; i < step - 1; i++)
+        {
+            _triangles.Add(_vertices.Count - 1);
+            _triangles.Add(i + 1);
+            _triangles.Add(i);
+        }
+        _mesh.SetTriangles(_triangles, 0);
     }
 
     void Update()
@@ -28,46 +61,21 @@ public class URGSensorView : MonoBehaviour
         _urg.SetDetectParam(_th, _minSize, _maxSize);
 
         // get urg pose matrix
-        var q = transform.worldToLocalMatrix.rotation;
-        var m = Matrix4x4.identity;
-        m.SetTRS(transform.position, q, transform.localScale);
-       _urg.Pose = m;
+        _urg.Pose = transform.localToWorldMatrix;
 
         var distance = _urg.Distances;
         var org = transform.position;
 
-        var count = 0;
-        for (int i = 0; i < distance.Length - 1; i++)
+        for (int i = 0; i < distance.Length; i++)
         {
-            var p = _urg.CalcPos(i);
-            Debug.DrawLine(org, p, new Color(0.2f, 0.2f, 0.2f), 0, false);
-
-            var dd = distance[i] - distance[i + 1];
-            if (dd > _th)
-            {
-                if (count == 0)
-                {
-                    Debug.DrawLine(org, p, new Color(1.0f, 0.0f, 0.0f), 0, false);
-                    ++count;
-                }
-            }
-            else if (dd < -_th)
-            {
-                Debug.DrawLine(org, p, new Color(0.0f, 1.0f, 0.0f), 0, false);
-                count = 0;
-            }
-            else
-            {
-                if (count > 0)
-                {
-                    ++count;
-                }
-            }
+            _vertices[i] = _urg.CalcRawPos(i);
         }
+        _mesh.SetVertices(_vertices);
+        _mesh.RecalculateBounds();
+        _mesh.RecalculateNormals();
 
         var objs = _urg.Objs;
-        if (objs == null) return;
-        //for (int i = 0; i < objs.Length; i++)
+        if (objs != null)
         {
             var item = objs[0];
             if (_spawn == null)

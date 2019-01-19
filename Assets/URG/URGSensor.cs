@@ -104,16 +104,29 @@ public class URGSensor
     }
 
     /// <summary>
-    /// 
+    /// get raw position  
+    /// </summary>
+    /// <param name="step"></param>
+    /// <returns></returns>
+    public Vector3 CalcRawPos(int step)
+    {
+        var th = (Mathf.PI * 2f / _ares) * step;
+        var x = Mathf.Cos(th) * _distance[step];
+        var z = Mathf.Sin(th) * _distance[step];
+        return new Vector3(x, 0, z) * 0.001f; // mm -> m
+    }
+
+    /// <summary>
+    /// get position with pose 
     /// </summary>
     /// <param name="step"></param>
     /// <returns></returns>
     public Vector3 CalcPos(int step)
     {
-        var th = (Mathf.PI * 2f / _ares) * step;
-        var x = Mathf.Cos(th) * _distance[step];
-        var z = Mathf.Sin(th) * _distance[step];
-        return _pose.MultiplyPoint(new Vector3(x, 0, z) * 0.001f); // mm -> m
+        //var th = (Mathf.PI * 2f / _ares) * step;
+        //var x = Mathf.Cos(th) * _distance[step];
+        //var z = Mathf.Sin(th) * _distance[step];
+        return _pose.MultiplyPoint(CalcRawPos(step));
     }
 
     public void GetObjs()
