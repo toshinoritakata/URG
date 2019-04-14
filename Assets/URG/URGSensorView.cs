@@ -5,28 +5,34 @@ using UnityEngine;
 using System.Text;
 using System.Net.Sockets;
 using SCIP_library;
+using DG.Tweening;
 
 public class URGSensorView : MonoBehaviour
 {
-    private URGSensor _urg;
-    [SerializeField] private int _th;
-    [SerializeField] private int _minSize;
-    [SerializeField] private int _maxSize;
+    [SerializeField] private int _distanceGap = 100;
+    [SerializeField] private int _minSize = 20;
+    [SerializeField] private int _maxSize = 100;
+    [SerializeField] private Vector2 _offsetXY_mm = Vector2.zero;
+    [SerializeField] private float _offsetRot_deg = 0f;
 
-    public GameObject _marker;
-    private GameObject _spawn;
+    private URGSensor _urg;     // URG sensor
+
+    public GameObject[] _flowers;
+    private GameObject[] _spawn;
+
+    private bool _calibrated;
 
     private Mesh _mesh;
     private List<Vector3> _vertices;
     private List<int> _triangles;
-    [SerializeField]
-    private Material _mat;
+    [SerializeField] private Material _mat;
 
     void Start()
     {
         _urg = new URGSensor();
         _urg.OpenStream("192.168.0.10", 0, 2160);
-        _spawn = null;
+        _spawn = new GameObject[100];
+        _calibrated = false;
 
         var meshFilter = gameObject.AddComponent<MeshFilter>();
         var meshRenderer = gameObject.AddComponent<MeshRenderer>();
@@ -57,41 +63,79 @@ public class URGSensorView : MonoBehaviour
 
     void Update()
     {
+        if (Input.GetKeyUp(KeyCode.Space))
+        {
+            _urg.StoreCalibrationData();
+            _calibrated = true;
+            _mesh.Clear();
+        }
+
+        transform.localPosition = new Vector3(_offsetXY_mm.x, _offsetXY_mm.y, 0f) / 1000f;
+        transform.localEulerAngles = new Vector3(0f, 0f, _offsetRot_deg);
+
         // set object detection param
-        _urg.SetDetectParam(_th, _minSize, _maxSize);
+        _urg.SetDetectParam(_distanceGap, _minSize, _maxSize);
 
         // get urg pose matrix
         _urg.Pose = transform.localToWorldMatrix;
 
-        var distance = _urg.Distances;
-        var org = transform.position;
-
-        for (int i = 0; i < distance.Length; i++)
+        if (_calibrated == false)
         {
-            _vertices[i] = _urg.CalcRawPos(i);
+            var distance = _urg.Distances;
+            for (int i = 0; i < distance.Length; i++)
+            {
+                _vertices[i] = _urg.CalcRawPos(i);
+            }
+            _mesh.SetVertices(_vertices);
+            _mesh.RecalculateBounds();
+            _mesh.RecalculateNormals();
         }
-        _mesh.SetVertices(_vertices);
-        _mesh.RecalculateBounds();
-        _mesh.RecalculateNormals();
 
         var objs = _urg.Objs;
-        if (objs != null)
+        if (objs == null) return;
+        for (int i = 0; i < objs.Length; i++)
         {
-            var item = objs[0];
-            if (_spawn == null)
+            var p = objs[i];
+            var pp = new Vector3(p.x, p.y, p.z);
+
+            int freeId = -1;
+            bool canBloom = true;
+            for (int n = 0; n < _spawn.Length; n++)
             {
-                var pp = new Vector3(item.x, item.y, item.z);
-                StartCoroutine(bomb(pp));
+                if (_spawn[n] == null)
+                {
+                    freeId = n;
+                    continue;
+                }
+
+                if ((_spawn[n].transform.localPosition - pp).magnitude < 0.2f)
+                {
+                    canBloom = false;
+                }
+            }
+            
+            if (canBloom)
+            {
+                Bloom(freeId, pp);
             }
         }
     }
 
-    IEnumerator bomb(Vector3 p)
+    void Bloom(int n, Vector3 p)
     {
-        _spawn = GameObject.Instantiate(_marker, p, Quaternion.identity);
-        yield return new WaitForSeconds(1);
-        GameObject.Destroy(_spawn);
-        _spawn = null;
+        _spawn[n] = GameObject.Instantiate(_flowers[n % _flowers.Length], p, Quaternion.identity);
+        _spawn[n].transform.localScale = Vector3.zero;
+
+        var seq = DOTween.Sequence();
+        seq.Append(_spawn[n].transform.DOScale(Vector3.one * 0.25f, 0.5f));
+        seq.Join(_spawn[n].transform.DOShakeRotation(0.5f, 30f));
+        seq.AppendInterval(5f);
+        seq.Append(_spawn[n].transform.DOScale(Vector3.zero, 1f));
+        seq.Join(_spawn[n].transform.DOShakeRotation(1f, -30f));
+        seq.OnComplete(() => {
+            GameObject.Destroy(_spawn[n]);
+            _spawn[n] = null;
+        });
     }
 
     private void OnDestroy()

@@ -14,20 +14,20 @@ public class URGSensor
     private int _start_step = 0;
     private int _end_step = 2160;
 
-    public List<long> _data;
+    private List<long> _read_data;
     private Thread _thread;
     private long[] _distance;
+    private long[] _calib_distance;
+    private long[] _filtered_distance;
     private bool _isRun;
     private object _lockobj;
     private int _ares;
     private int _amax;
-    private int _th = 100;
+    private int _distanceGap = 100;
     private int _minSize = 20;
     private int _maxSize = 150;
     private Matrix4x4 _pose;
     public Matrix4x4 Pose { set { _pose = value; } }
-
-    public Action<Vector4> _OnDetect;
 
     private List<Vector4> _objs;
     public Vector4[] Objs
@@ -64,9 +64,15 @@ public class URGSensor
         }
     }
 
-    public void SetDetectParam(int th, int minSize, int maxSize)
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="gap"></param>
+    /// <param name="minSize"></param>
+    /// <param name="maxSize"></param>
+    public void SetDetectParam(int gap, int minSize, int maxSize)
     {
-        if (th > 0) _th = th;
+        if (gap > 0) _distanceGap = gap;
         if (minSize > 0) _minSize = minSize;
         if (maxSize > _minSize) _maxSize = maxSize;
     }
@@ -93,14 +99,29 @@ public class URGSensor
         read_line(_stream);  // ignore echo back
 
         _lockobj = new object();
-        _data = new List<long>();
+        _read_data = new List<long>();
         _distance = new long[_amax+1];
+        _calib_distance = new long[_amax+1]; // store calibration data
+        _filtered_distance = new long[_amax+1];
 
         _objs = new List<Vector4>();
 
         _isRun = true;
-        _thread = new Thread(new ThreadStart(getData));
+        _thread = new Thread(new ThreadStart(getDataWork));
         _thread.Start();
+    }
+
+    public void StoreCalibrationData()
+    {
+        _distance.CopyTo(_calib_distance, 0);
+    }
+
+    private Vector3 distToPos(int step, long dist)
+    {
+        var th = (Mathf.PI * 2f / _ares) * step - (Mathf.PI * 0.25f);
+        var x = Mathf.Cos(th) * dist;
+        var y = Mathf.Sin(th) * dist;
+        return new Vector3(x, y, 0) * 0.001f; // mm -> m
     }
 
     /// <summary>
@@ -110,11 +131,14 @@ public class URGSensor
     /// <returns></returns>
     public Vector3 CalcRawPos(int step)
     {
-        var th = (Mathf.PI * 2f / _ares) * step;
-        var x = Mathf.Cos(th) * _distance[step];
-        var z = Mathf.Sin(th) * _distance[step];
-        return new Vector3(x, 0, z) * 0.001f; // mm -> m
+        return distToPos(step, _distance[step]);
     }
+
+    public Vector3 CalcCalibPos(int step)
+    {
+        return distToPos(step, Math.Abs(_distance[step] - _calib_distance[step]));
+    }
+
 
     /// <summary>
     /// get position with pose 
@@ -123,14 +147,52 @@ public class URGSensor
     /// <returns></returns>
     public Vector3 CalcPos(int step)
     {
-        //var th = (Mathf.PI * 2f / _ares) * step;
-        //var x = Mathf.Cos(th) * _distance[step];
-        //var z = Mathf.Sin(th) * _distance[step];
         return _pose.MultiplyPoint(CalcRawPos(step));
     }
 
     public void GetObjs()
     {
+        // median filer
+        int filterSize = 3;
+        var tmp = new long[filterSize];
+        int mid = filterSize / 2;
+        for (int i = 0; i < this.Steps; i++)
+        {
+            for (int n = 0; n < filterSize; n++)
+            {
+                var m = Math.Min(Math.Max(0, i + n - mid), this.Steps - 1);
+                tmp[n] = Math.Abs(_distance[m] - _calib_distance[m]);
+            }
+            Array.Sort(tmp);
+            _filtered_distance[i] = tmp[mid];
+        }
+
+        /*
+        int filterSize = 3;
+        long tmp = 0;
+        int mid = filterSize/2;
+        for (int i = 0; i < this.Steps; i++)
+        {
+            // box filter
+            for (int n = 0; n < filterSize; n++)
+            {
+                var m = Math.Min(Math.Max(0, i + n - mid), this.Steps - 1);
+                tmp += Math.Abs(_distance[m] - _calib_distance[m]);
+            }
+            _filtered_distance[i] = tmp / filterSize;
+
+            // no filter
+            //tmp = Math.Abs(_distance[i] - _calib_distance[i]);
+            //_filtered_distance[i] = tmp;
+        }
+
+        // no filter
+        for (int i = 0; i < this.Steps; i++)
+        {
+            _filtered_distance[i] = Math.Abs(_distance[i] - _calib_distance[i]);
+        }
+        */
+
         int count = 0;
         Vector3 sp = Vector3.zero;
         Vector3 cp = Vector3.zero;
@@ -138,8 +200,10 @@ public class URGSensor
         _objs.Clear();
         for (int i = 0; i < this.Steps - 1; i++)
         {
-            var dd = _distance[i] - _distance[i + 1];
-            if (dd > _th)
+            var dd0 = _filtered_distance[i];
+            var dd1 = _filtered_distance[i + 1];
+            var dd = dd1 - dd0;
+            if (dd > _distanceGap)
             {
                 if (count == 0)
                 {
@@ -148,7 +212,7 @@ public class URGSensor
                     ++count;
                 }
             }
-            else if (dd < -_th)
+            else if (dd < -_distanceGap)
             {
                 if (count > _minSize && count < _maxSize)
                 {
@@ -169,18 +233,18 @@ public class URGSensor
         }
     }
 
-    private void getData()
+    private void getDataWork()
     {
         var time_stamp = 0L;
         while (_isRun)
         {
             var receive_data = read_line(_stream);
-            SCIP_Reader.MD(receive_data, ref time_stamp, ref _data);
-            if (_data.Count == 0) continue;
+            SCIP_Reader.MD(receive_data, ref time_stamp, ref _read_data);
+            if (_read_data.Count == 0) continue;
 
             lock (_lockobj)
             {
-                _data.CopyTo(_distance);
+                _read_data.CopyTo(_distance);
                 GetObjs();
             }
         }
