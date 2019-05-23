@@ -10,3 +10,7 @@ CGWORLD連載用 北陽電機の測域センサーを利用したコンテンツ
 - URGSensorView.cs
   - USTデータの可視化サンプル
   
+サンプルにはDOTweenアセットを利用しています。
+以下からダウンロードしてインストールしてください。
+http://dotween.demigiant.com/
+
